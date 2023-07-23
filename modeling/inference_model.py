@@ -271,6 +271,7 @@ class InferenceModel:
 
         start_time = time.time()
         gen_in = torch.tensor(text, dtype=torch.long)[None]
+
         logger.debug(
             "core_generate: torch.tensor time {}s".format(time.time() - start_time)
         )
@@ -310,8 +311,14 @@ class InferenceModel:
             <= utils.koboldai_vars.max_length
         )
 
+        if utils.koboldai_vars.uncond_ids is None:
+            uncond_ids = gen_in[:, -1:].detach()
+        else:
+            uncond_ids = torch.tensor(utils.koboldai_vars.uncond_ids, dtype=torch.long)[None]
+
         start_time = time.time()
         gen_in = gen_in.to(self.get_auxilary_device())
+        uncond_ids = uncond_ids.to(self.get_auxilary_device())
 
         logger.debug(
             "core_generate: gen_in to device time {}s".format(time.time() - start_time)
@@ -358,6 +365,7 @@ class InferenceModel:
                         seed=utils.koboldai_vars.seed
                         if utils.koboldai_vars.full_determinism
                         else None,
+                        uncond_ids=uncond_ids,
                     )
                     logger.debug(
                         "core_generate: run raw_generate pass {} {}s".format(
@@ -580,6 +588,11 @@ class InferenceModel:
         else:
             raise ValueError(f"Prompt is {type(prompt)}. Not a fan!")
 
+        try:
+            uncond_ids = kwargs['uncond_ids']
+        except:
+            uncond_ids = prompt_tokens[-1:]
+
         assert isinstance(prompt_tokens, np.ndarray)
         assert len(prompt_tokens.shape) == 1
 
@@ -594,6 +607,7 @@ class InferenceModel:
                 single_line=single_line,
                 tpu_dynamic_inference=tpu_dynamic_inference,
                 seed=seed,
+                uncond_ids=uncond_ids,
             )
 
         time_end = round(time.time() - time_start, 2)

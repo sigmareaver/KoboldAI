@@ -135,7 +135,7 @@ class HFTorchInferenceModel(HFInferenceModel):
         return torch.float16
 
     def _apply_warpers(
-        self, scores: torch.Tensor, input_ids: torch.Tensor
+        self, scores: torch.Tensor, input_ids: torch.Tensor, uncond_ids: torch.Tensor
     ) -> torch.Tensor:
         warpers.update_settings()
 
@@ -151,6 +151,8 @@ class HFTorchInferenceModel(HFInferenceModel):
             if warper == warpers.RepetitionPenalty:
                 # Rep pen needs more data than other samplers
                 scores = warper.torch(scores, input_ids=input_ids)
+            elif warper == warpers.CFG:
+                scores = warper.torch(scores, input_ids=input_ids, uncond_ids=uncond_ids, model=self.model)
             else:
                 scores = warper.torch(scores)
 
@@ -225,6 +227,9 @@ class HFTorchInferenceModel(HFInferenceModel):
         )
 
         class KoboldLogitsWarperList(LogitsProcessorList):
+            def __init__(self):
+                pass
+
             def __call__(
                 lw_self,
                 input_ids: torch.LongTensor,
@@ -232,7 +237,10 @@ class HFTorchInferenceModel(HFInferenceModel):
                 *args,
                 **kwargs,
             ):
-                scores = m_self._apply_warpers(scores=scores, input_ids=input_ids)
+
+                uncond_ids = kwargs['uncond_ids']
+                kwargs.pop('uncond_ids', None)
+                scores = m_self._apply_warpers(scores=scores, input_ids=input_ids, uncond_ids=uncond_ids)
 
                 for processor in m_self.logits_processors:
                     scores = processor(m_self, scores=scores, input_ids=input_ids)
@@ -241,10 +249,16 @@ class HFTorchInferenceModel(HFInferenceModel):
                     ), f"Scores are None; processor '{processor}' is to blame"
                 return scores
 
+        def new_get_logits_warper(
+            beams: int = 1,
+        ) -> LogitsProcessorList:
+            return KoboldLogitsWarperList()
+
         def new_sample(self, *args, **kwargs):
             assert kwargs.pop("logits_warper", None) is not None
-            kwargs["logits_warper"] = KoboldLogitsWarperList()
-
+            kwargs["logits_warper"] = new_get_logits_warper(
+                beams=1,
+            )
             if utils.koboldai_vars.newlinemode in ["s", "ns"]:
                 kwargs["eos_token_id"] = -1
                 kwargs.setdefault("pad_token_id", 2)
@@ -314,6 +328,8 @@ class HFTorchInferenceModel(HFInferenceModel):
         if seed is not None:
             torch.manual_seed(seed)
 
+        uncond_ids = kwargs['uncond_ids']
+
         with torch.no_grad():
             start_time = time.time()
             genout = self.model.generate(
@@ -326,6 +342,7 @@ class HFTorchInferenceModel(HFInferenceModel):
                 bad_words_ids=self.badwordsids + additional_bad_words_ids,
                 use_cache=True,
                 num_return_sequences=batch_count,
+                uncond_ids=uncond_ids
             )
         logger.debug(
             "torch_raw_generate: run generator {}s".format(time.time() - start_time)

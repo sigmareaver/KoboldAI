@@ -15,7 +15,23 @@ gensettingstf = [
     "name": "genamt",
     "ui_level": 0
 	},
-   {
+	{
+	"uitype": "slider",
+	"unit": "float",
+	"label": "CFG Sampling",
+	"id": "setcfg",
+	"min": 1.0,
+	"max": 2.0,
+	"step": 0.05,
+	"default": 1.0,
+    "tooltip": "Classifier Free Guidance helps keep the AI on track and also steers the AI away from the negative prompt.",
+    "menu_path": "Settings",
+    "sub_path":  "Sampling",
+    "classname": "model",
+    "name": "cfg",
+    "ui_level": 1
+	},
+	{
 	"uitype": "slider",
 	"unit": "float",
 	"label": "Temperature",
@@ -992,7 +1008,24 @@ gensettingstf = [
 	},
 ]
 
-gensettingsik =[{
+gensettingsik =[
+	{
+	"uitype": "slider",
+	"unit": "float",
+	"label": "CFG Sampling",
+	"id": "setcfg",
+	"min": 1.0,
+	"max": 2.0,
+	"step": 0.05,
+	"default": 1.0,
+    "tooltip": "Classifier Free Guidance helps keep the AI on track and also steers the AI away from the negative prompt.",
+    "menu_path": "Model",
+    "sub_path":  "Sampling",
+    "classname": "model",
+    "name": "cfg",
+    "ui_level": 1
+	},
+	{
 	"uitype": "slider",
 	"unit": "float",
 	"label": "Temperature",

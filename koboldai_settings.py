@@ -101,6 +101,7 @@ class koboldai_vars(object):
         self._undefined_settings = undefined_settings()
         self._socketio = socketio
         self.tokenizer = None
+        self.uncond_ids = None
     
     def get_story_name(self):
         global multi_story
@@ -308,7 +309,19 @@ class koboldai_vars(object):
                             "tokens": memory_data,
                             "attention_multiplier": self.memory_attn_bias})
             used_tokens += len(memory_tokens)
-        
+
+
+        ######################################### Add unconditional ########################################################
+        if self.unconditional != "":
+            unconditional_tokens = self.tokenizer.encode(self.unconditional)
+        else:
+            unconditional_tokens = []
+
+        if len(unconditional_tokens) != 0:
+            self.uncond_ids = unconditional_tokens
+        else:
+            self.uncond_ids = None
+
         
         ######################################### Constant World Info ########################################################
         #Add constant world info entries to memory
@@ -653,8 +666,8 @@ class model_settings(settings):
                          'welcome', 'welcome_default', 'simple_randomness', 'simple_creativity', 'simple_repitition',
                          'badwordsids', 'uid_presets', 'model', 'model_type', 'lazy_load', 'fp32_model', 'modeldim', 'horde_wait_time', 'horde_queue_position', 'horde_queue_size', 'newlinemode', 'tqdm_progress', 'tqdm_rem_time', '_tqdm']
     settings_name = "model"
-    default_settings = {"rep_pen" : 1.1, "rep_pen_slope": 0.7, "rep_pen_range": 1024, "temp": 0.5, "top_p": 0.9, "top_k": 0, "top_a": 0.0, "tfs": 1.0, "typical": 1.0,
-                        "sampler_order": [6,0,1,2,3,4,5]}
+    default_settings = {"rep_pen" : 1.1, "rep_pen_slope": 0.7, "rep_pen_range": 1024, "cfg": 1.0, "temp": 0.5, "top_p": 0.9, "top_k": 0, "top_a": 0.0, "tfs": 1.0, "typical": 1.0,
+                        "sampler_order": [7,0,1,2,3,4,5,6]}
     def __init__(self, socketio, koboldai_vars):
         self.enable_whitelist = False
         self._socketio = socketio
@@ -697,6 +710,9 @@ class model_settings(settings):
         self.rep_pen     = 1.1     # Default generator repetition_penalty
         self.rep_pen_slope = 0.7   # Default generator repetition penalty slope
         self.rep_pen_range = 1024  # Default generator repetition penalty range
+        self.cfg         = 1.0
+        self.unconditional = ""
+        self.uncond_ids  = None
         self.temp        = 0.5     # Default generator temperature
         self.top_p       = 0.9     # Default generator top_p
         self.top_k       = 0       # Default generator top_k
@@ -708,7 +724,7 @@ class model_settings(settings):
         self.badwordsids = []
         self.fp32_model  = False  # Whether or not the most recently loaded HF model was in fp32 format
         self.modeldim    = -1     # Embedding dimension of your model (e.g. it's 4096 for GPT-J-6B and 2560 for GPT-Neo-2.7B)
-        self.sampler_order = [6, 0, 1, 2, 3, 4, 5]
+        self.sampler_order = [7, 0, 1, 2, 3, 4, 5, 6]
         self.newlinemode = "n"
         self.presets     = []   # Holder for presets
         self.selected_preset = ""
@@ -736,6 +752,7 @@ class model_settings(settings):
                 
         if name in ['simple_randomness', 'simple_creativity', 'simple_repitition'] and not new_variable:
             #We need to disable all of the samplers
+            self.cfg = 1.0
             self.top_k = 0
             self.top_a = 0.0
             self.tfs = 1.0
@@ -842,6 +859,8 @@ class story_settings(settings):
         self.prompt      = ""     # Prompt
         self.prompt_wi_highlighted_text = [{"text": self.prompt, "WI matches": None, "WI Text": ""}]
         self.memory      = ""     # Text submitted to memory field
+        self.unconditional = ""
+        self.uncond_ids  = None
         self.auto_memory = ""
         self.authornote  = ""     # Text submitted to Author's Note field
         self.authornotetemplate = "[Author's note: <|>]"  # Author's note template
@@ -1066,7 +1085,7 @@ class story_settings(settings):
 
         if not new_variable and old_value != value:
             #Change game save state
-            if name in ['story_name', 'prompt', 'memory', 'authornote', 'authornotetemplate', 'andepth', 'chatname', 'actionmode', 'dynamicscan', 'notes', 'biases']:
+            if name in ['story_name', 'prompt', 'memory', 'unconditional', 'authornote', 'authornotetemplate', 'andepth', 'chatname', 'actionmode', 'dynamicscan', 'notes', 'biases']:
                 self.gamesaved = False
             
             if name == "gen_audio" and value:
@@ -1090,6 +1109,8 @@ class story_settings(settings):
             elif name == 'authornotetemplate':
                 ignore = self._koboldai_vars.calc_ai_text()
             elif name == 'memory':
+                ignore = self._koboldai_vars.calc_ai_text()
+            elif name == 'unconditional':
                 ignore = self._koboldai_vars.calc_ai_text()
             elif name == "genres":
                 self._koboldai_vars.calc_ai_text()
@@ -2731,6 +2752,7 @@ default_preset = {
         "description": "Known working settings.",
         "Match": "Recommended",
         "Preset Category": "Official",
+        "cfg": 1.0,
         "temp": 0.5,
         "genamt": 80,
         "top_k": 0,
@@ -2742,13 +2764,14 @@ default_preset = {
         "rep_pen_range": 1024,
         "rep_pen_slope": 0.7,
         "sampler_order": [
-            6,
+            7,
             0,
             1,
             2,
             3,
             4,
-            5
+            5,
+            6
         ]
     }
 badwordsids_default = [[6880], [50256], [42496], [4613], [17414], [22039], [16410], [27], [29], [38430], [37922], [15913], [24618], [28725], [58], [47175], [36937], [26700], [12878], [16471], [37981], [5218], [29795], [13412], [45160], [3693], [49778], [4211], [20598], [36475], [33409], [44167], [32406], [29847], [29342], [42669], [685], [25787], [7359], [3784], [5320], [33994], [33490], [34516], [43734], [17635], [24293], [9959], [23785], [21737], [28401], [18161], [26358], [32509], [1279], [38155], [18189], [26894], [6927], [14610], [23834], [11037], [14631], [26933], [46904], [22330], [25915], [47934], [38214], [1875], [14692], [41832], [13163], [25970], [29565], [44926], [19841], [37250], [49029], [9609], [44438], [16791], [17816], [30109], [41888], [47527], [42924], [23984], [49074], [33717], [31161], [49082], [30138], [31175], [12240], [14804], [7131], [26076], [33250], [3556], [38381], [36338], [32756], [46581], [17912], [49146]] # Tokenized array of badwords used to prevent AI artifacting

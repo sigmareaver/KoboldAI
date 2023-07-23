@@ -87,6 +87,7 @@ var token_prob_container;
 var storyname = null;
 var memorymode = false;
 var memorytext = "";
+var unconditional = "";
 var gamestarted = false;
 var wiscroll = 0;
 var editmode = false;

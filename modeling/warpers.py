@@ -37,6 +37,7 @@ file are mostly porting warper code to the torch methods.
 # Comments mostly taken from tpu_mtj_backend.py
 
 from __future__ import annotations
+from typing import Optional
 
 import utils
 import torch
@@ -58,6 +59,8 @@ if ok:
 def update_settings():
     # This feels like a bad way to structure this
     koboldai_vars = utils.koboldai_vars
+    CFG.cfg = koboldai_vars.cfg
+    CFG.uncond_ids = koboldai_vars.uncond_ids
     Temperature.temperature = koboldai_vars.temp
     TopP.top_p = koboldai_vars.top_p
     TopK.top_k = koboldai_vars.top_k
@@ -96,13 +99,14 @@ class Warper:
     @staticmethod
     def from_id(warper_id: int) -> Warper:
         return {
-            0: TopK,
-            1: TopA,
-            2: TopP,
-            3: TailFree,
-            4: Typical,
-            5: Temperature,
-            6: RepetitionPenalty,
+            0: CFG,
+            1: TopK,
+            2: TopA,
+            3: TopP,
+            4: TailFree,
+            5: Typical,
+            6: Temperature,
+            7: RepetitionPenalty,
         }[warper_id]
 
     @classmethod
@@ -117,6 +121,57 @@ class Warper:
     def value_is_valid(cls) -> bool:
         raise NotImplementedError("Please override `value_is_valid()`.")
 
+
+class CFG(Warper):
+    """
+    Top-p (after sorting the remaining tokens again in descending order of
+    logit, remove the ones that have cumulative softmax probability
+    greater than p)
+    """
+
+    cfg = 1.0
+    out = None
+
+    @classmethod
+    def torch(cls, scores: torch.Tensor, input_ids: torch.Tensor, uncond_ids: torch.LongTensor, model) -> torch.Tensor:
+
+        if cls.cfg == 1:
+            return scores.log_softmax(dim=-1)
+        scores = scores.log_softmax(dim=-1)
+        if cls.out is None:
+            cls.out = model(uncond_ids, use_cache=True)
+        else:
+            cls.out = model(input_ids[:, -1:],
+                                  use_cache=True,
+                                  past_key_values=cls.out.past_key_values)
+        unconditional_logits = cls.out.logits[0][-1:].log_softmax(dim=-1)
+        out = cls.cfg * (scores - unconditional_logits) + unconditional_logits
+        return out
+
+    @classmethod
+    def jax_dynamic(cls, scores: jnp.array, tokens: jnp.array, model) -> np.array:
+        raise NotImplementedError("TPU doesn't currently support CFG Sampler")
+
+        if cls.uncond_ids is None:
+            koboldai_vars = utils.koboldai_vars
+            cls.uncond_ids = torch.tensor(koboldai_vars.uncond_ids, dtype=torch.long)[None]
+
+        if cls.cfg == 1:
+            return np.array(jax.nn.log_softmax(scores), copy=True)
+        scores = np.array(jax.nn.log_softmax(scores), copy=True)
+        if cls.out is None:
+            cls.out = model(cls.uncond_ids, use_cache=True)
+        else:
+            cls.out = model(tokens[:, -1:],
+                                  use_cache=True,
+                                  past_key_values=cls.out.past_key_values)
+        unconditional_logits = np.array(jax.nn.log_softmax(cls.out.logits[0][-1:]), copy=True)
+        out = cls.cfg * (scores - unconditional_logits) + unconditional_logits
+        return out
+
+    @classmethod
+    def value_is_valid(cls) -> bool:
+        return cls.cfg != 0.0
 
 class Temperature(Warper):
     """Temperature (just divide the logits by the temperature)"""

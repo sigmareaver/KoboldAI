@@ -224,6 +224,8 @@ def kobold_sample_dynamic(key, logits, rpargs, sampler_order: Optional[np.ndarra
         # Repetition Penalty needs more info about the context
         if warper == warpers.RepetitionPenalty:
             logits = warper.jax_dynamic(logits, *rpargs)
+        elif warper == warpers.CFG:
+            logits = warper.jax_dynamic(logits, *rpargs)
         else:
             logits = warper.jax_dynamic(logits)
 
@@ -437,7 +439,7 @@ def sample_func(data, key, numseqs_aux, badwords, repetition_penalty, generated_
             logits,
             (
                 generated,
-                generated_index, 
+                generated_index,
             ),
             **sampler_options,
         )

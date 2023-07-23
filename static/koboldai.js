@@ -83,7 +83,6 @@ let story_id = -1;
 var dirty_chunks = [];
 var initial_socketio_connection_occured = false;
 var selected_model_data;
-var privacy_mode_enabled = false;
 
 // Each entry into this array should be an object that looks like:
 // {class: "class", key: "key", func: callback}
@@ -106,6 +105,7 @@ var finder_actions = [
 	// Locations
 	{name: "Setting Presets", icon: "open_in_new", type: "location", func: function() { highlightEl(".var_sync_model_selected_preset") }},
 	{name: "Memory", icon: "open_in_new", type: "location", func: function() { highlightEl("#memory") }},
+	{name: "Unconditional", icon: "open_in_new", type: "location", func: function() { highlightEl("#unconditional") }},
 	{name: "Author's Note", icon: "open_in_new", type: "location", func: function() { highlightEl("#authors_notes") }},
 	{name: "Notes", icon: "open_in_new", type: "location", func: function() { highlightEl(".var_sync_story_notes") }},
 	{name: "World Info", icon: "open_in_new", type: "location", func: function() { highlightEl("#WI_Area") }},
@@ -162,7 +162,7 @@ const shortcuts = [
 	{mod: "ctrl", key: "m", desc: "Focuses Memory", func: () => focusEl("#memory")},
 	{mod: "ctrl", key: "u", desc: "Focuses Author's Note", func: () => focusEl("#authors_notes")}, // CTRL-N is reserved :^(
 	{mod: "ctrl", key: "g", desc: "Focuses game text", func: () => focusEl("#input_text")},
-	{mod: "ctrl", key: "l", desc: '"Lock" screen (Not secure)', func: maybe_enable_privacy_mode},
+	{mod: "ctrl", key: "l", desc: '"Lock" screen (Not secure)', func: () => socket.emit("privacy_mode", {'enabled': true})},
 	{mod: "ctrl", key: "k", desc: "Finder", func: open_finder},
 	{mod: "ctrl", key: "/", desc: "Help screen", func: () => openPopup("shortcuts-popup")},
 ]
@@ -193,21 +193,23 @@ function $el(selector) {
 }
 
 const map1 = new Map()
-map1.set('Top K Sampling', 0)
-map1.set('Top A Sampling', 1)
-map1.set('Top P Sampling', 2)
-map1.set('Tail Free Sampling', 3)
-map1.set('Typical Sampling', 4)
-map1.set('Temperature', 5)
-map1.set('Repetition Penalty', 6)
+map1.set('CFG Sampling', 0)
+map1.set('Top K Sampling', 1)
+map1.set('Top A Sampling', 2)
+map1.set('Top P Sampling', 3)
+map1.set('Tail Free Sampling', 4)
+map1.set('Typical Sampling', 5)
+map1.set('Temperature', 6)
+map1.set('Repetition Penalty', 7)
 const map2 = new Map()
-map2.set(0, 'Top K Sampling')
-map2.set(1, 'Top A Sampling')
-map2.set(2, 'Top P Sampling')
-map2.set(3, 'Tail Free Sampling')
-map2.set(4, 'Typical Sampling')
-map2.set(5, 'Temperature')
-map2.set(6, 'Repetition Penalty')
+map2.set(0, 'CFG Sampling')
+map2.set(1, 'Top K Sampling')
+map2.set(2, 'Top A Sampling')
+map2.set(3, 'Top P Sampling')
+map2.set(4, 'Tail Free Sampling')
+map2.set(5, 'Typical Sampling')
+map2.set(6, 'Temperature')
+map2.set(7, 'Repetition Penalty')
 var calc_token_usage_timeout;
 var game_text_scroll_timeout;
 var auto_loader_timeout;
@@ -598,11 +600,13 @@ function do_story_text_updates(action) {
 				story_area.append(item);
 			}
 		}
-
-		item.classList.toggle(
-			"action_mode_input",
-			action.action['Selected Text'].replaceAll("\n", "")[0] === ">"
-		);
+		
+		
+		if (action.action['Selected Text'].charAt(0) == ">") {
+			item.classList.add("action_mode_input");
+		} else {
+			item.classList.remove("action_mode_input");
+		}
 
 		if ('wi_highlighted_text' in action.action) {
 			for (chunk of action.action['wi_highlighted_text']) {
@@ -2010,7 +2014,7 @@ function load_model() {
 	data = {}
 	if (settings_area) {
 		for (const element of settings_area.querySelectorAll(".model_settings_input:not(.hidden)")) {
-			var element_data = element.getAttribute("data_type") === "bool" ? element.checked : element.value;
+			var element_data = element.value;
 			if ((element.tagName == "SELECT") && (element.multiple)) {
 				element_data = [];
 				for (var i=0, iLen=element.options.length; i<iLen; i++) {
@@ -2023,6 +2027,8 @@ function load_model() {
 					element_data = parseInt(element_data);
 				} else if (element.getAttribute("data_type") == "float") {
 					element_data = parseFloat(element_data);
+				} else if (element.getAttribute("data_type") == "bool") {
+					element_data = (element_data == 'on');
 				}
 			}
 			data[element.id.split("|")[1].replace("_value", "")] = element_data;
@@ -2407,12 +2413,12 @@ function world_info_entry(data) {
 	comment.setAttribute("uid", data.uid);
 	comment.value = data.comment;
 	comment.onchange = function () {
-							world_info_data[data.uid].comment = this.value;
-							send_world_info(data.uid);
+							world_info_data[this.getAttribute('uid')]['comment'] = this.textContent;
+							send_world_info(this.getAttribute('uid'));
 							this.classList.add("pulse");
 						}
 	comment.classList.remove("pulse");
-
+						
 	//Let's figure out the order to insert this card
 	var found = false;
 	var moved = false;
@@ -3403,36 +3409,16 @@ function update_story_picture(chunk_id) {
 	image.setAttribute("chunk", chunk_id);
 }
 
-function maybe_enable_privacy_mode() {
-	const password = document.getElementById("user_privacy_password").value;
-
-	if (!password) {
-		showNotification(
-			"Lock Failed",
-			"Please set a password before locking KoboldAI.",
-			"error"
-		)
-		return;
-	}
-
-	socket.emit("privacy_mode", {'enabled': true})
-}
-
 function privacy_mode(enabled) {
-	privacy_mode_enabled = enabled;
-	updateTitle();
-
-	const sideMenu = document.getElementById("SideMenu");
-	const mainGrid = document.getElementById("main-grid");
-	const rightSideMenu = document.getElementById("rightSideMenu");
-
-	for (const menu of [sideMenu, mainGrid, rightSideMenu]) {
-		menu.classList.toggle("superblur", enabled);
-	}
-
 	if (enabled) {
+		document.getElementById('SideMenu').classList.add("superblur");
+		document.getElementById('main-grid').classList.add("superblur");
+		document.getElementById('rightSideMenu').classList.add("superblur");
 		openPopup("privacy_mode");
 	} else {
+		document.getElementById('SideMenu').classList.remove("superblur");
+		document.getElementById('main-grid').classList.remove("superblur");
+		document.getElementById('rightSideMenu').classList.remove("superblur");
 		if (!$el("#privacy_mode").classList.contains("hidden")) closePopups();
 		document.getElementById('privacy_password').value = "";
 	}
@@ -3449,6 +3435,11 @@ function set_font_size(element) {
 function push_selection_to_memory() {
 	document.getElementById("memory").value += "\n" + getSelectionText();
 	document.getElementById("memory").onchange();
+}
+
+function push_selection_to_unconditional() {
+	document.getElementById("unconditional").value += "\n" + getSelectionText();
+	document.getElementById("unconditional").onchange();
 }
 
 function push_selection_to_world_info() {
@@ -4101,6 +4092,7 @@ function update_context(data) {
 			world_info: "wi",
 			genre: "genre",
 			memory: "memory",
+			unconditional: "unconditional",
 			authors_note: "an",
 			action: "action",
 			submit: 'submit'
@@ -4729,7 +4721,7 @@ function close_menus() {
 	document.getElementById("main-grid").classList.remove("story_menu-open");
 	
 	//close popup menus
-	closePopups(true);
+	closePopups();
 	
 	//unselect sampler items
 	for (temp of document.getElementsByClassName("sample_order")) {
@@ -4971,6 +4963,7 @@ async function downloadDebugFile(redact=true) {
 			"story_settings.lastact",
 			"story_settings.lastctx",
 			"story_settings.memory",
+			"story_settings.unconditional",
 			"story_settings.notes",
 			"story_settings.prompt",
 			"story_settings.story_name",
@@ -5830,15 +5823,8 @@ function position_context_menu(contextMenu, x, y) {
 
 function updateTitle() {
 	const titleInput = $el(".var_sync_story_story_name");
-	let titleText = "Story";
-
-	if (!privacy_mode_enabled && titleInput.innerText) {
-		titleText = titleInput.innerText;
-	} else {
-		titleText = "[🔒]"
-	}
-
-	document.title = `${titleText} - KoboldAI Client`;
+	if (!titleInput.innerText) return;
+	document.title = `${titleInput.innerText} - KoboldAI Client`;
 }
 
 function openClubImport() {
@@ -5873,27 +5859,17 @@ function openPopup(id) {
 	}
 }
 
-function closePopups(userAction=false) {
-	// userAction specifies if a user tried to close the popup by normal means
-	// (ESC, clicking outside the menu, etc).
+function closePopups() {
 	const container = $el("#popup-container");
-	let allHidden = true;
+	container.classList.add("hidden");
 
 	for (const popupWindow of container.children) {
-		// Do not let the user close windows they shouldn't be! Sneaky devils!
-		if (userAction && popupWindow.getAttribute("allow-close") === "false") {
-			allHidden = false;
-			continue;
-		}
-
 		popupWindow.classList.add("hidden");
 	}
-
-	if (allHidden) container.classList.add("hidden");
 }
 
 $el("#popup-container").addEventListener("click", function(event) {
-	if (event.target === this) closePopups(true);
+	if (event.target === this) closePopups();
 });
 
 /* -- Colab Cookie Handling -- */

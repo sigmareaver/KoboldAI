@@ -1116,6 +1116,9 @@ def loadmodelsettings():
         if(len(sampler_order) < 7):
             sampler_order = [6] + sampler_order
         koboldai_vars.sampler_order = sampler_order
+    if("cfg" in js):
+        koboldai_vars.temp       = js["cfg"]
+        koboldai_vars.default_preset['cfg'] = js["cfg"]
     if("temp" in js):
         koboldai_vars.temp       = js["temp"]
         koboldai_vars.default_preset['temp'] = js["temp"]
@@ -1894,7 +1897,6 @@ def load_model(model_backend, initial_load=False):
         logger.message(f"KoboldAI has finished loading and is available at the following link for KoboldAI Lite: {koboldai_vars.cloudflare_link}/lite")
         logger.message(f"KoboldAI has finished loading and is available at the following link for the API: {koboldai_vars.cloudflare_link}/api")
 
-
 # Setup IP Whitelisting
 # Define a function to check if IP is allowed
 def is_allowed_ip():
@@ -2285,6 +2287,7 @@ def lua_has_setting(setting):
         "setnopromptgen",
         "autosave",
         "setrngpersist",
+        "cfg",
         "temp",
         "topp",
         "top_p",
@@ -2325,6 +2328,7 @@ def lua_has_setting(setting):
 #==================================================================#
 @bridged_kwarg()
 def lua_get_setting(setting):
+    if(setting in ("setcfg", "cfg")): return koboldai_vars.cfg
     if(setting in ("settemp", "temp")): return koboldai_vars.temp
     if(setting in ("settopp", "topp", "top_p")): return koboldai_vars.top_p
     if(setting in ("settopk", "topk", "top_k")): return koboldai_vars.top_k
@@ -2363,6 +2367,7 @@ def lua_set_setting(setting, v):
     print(colors.GREEN + f"{lua_log_format_name(koboldai_vars.lua_koboldbridge.logging_name)} set {setting} to {v}" + colors.END)
     if(setting in ("setadventure", "adventure") and v):
         koboldai_vars.actionmode = 1
+    if(setting in ("setcfg", "cfg")): koboldai_vars.cfg = v
     if(setting in ("settemp", "temp")): koboldai_vars.temp = v
     if(setting in ("settopp", "topp")): koboldai_vars.top_p = v
     if(setting in ("settopk", "topk")): koboldai_vars.top_k = v
@@ -2740,6 +2745,8 @@ def get_message(msg):
         deleterequest()
     elif(msg['cmd'] == 'memory'):
         togglememorymode()
+    elif(msg['cmd'] == 'unconditional'):
+        toggleunconditionalmode()
     #elif(not koboldai_vars.host and msg['cmd'] == 'savetofile'):
     #    savetofile()
     elif(not koboldai_vars.host and msg['cmd'] == 'loadfromfile'):
@@ -2752,6 +2759,11 @@ def get_message(msg):
         newGameRequest()
     elif(msg['cmd'] == 'rndgame'):
         randomGameRequest(msg['data'], memory=msg['memory'])
+    elif(msg['cmd'] == 'setcfg'):
+        koboldai_vars.cfg = float(msg['data'])
+        emit('from_server', {'cmd': 'setlabelcfg', 'data': msg['data']}, broadcast=True, room="UI_1")
+        settingschanged()
+        refresh_settings()
     elif(msg['cmd'] == 'settemp'):
         koboldai_vars.temp = float(msg['data'])
         emit('from_server', {'cmd': 'setlabeltemp', 'data': msg['data']}, broadcast=True, room="UI_1")
@@ -2947,8 +2959,8 @@ def get_message(msg):
         sendUSStatItems()
     elif(msg['cmd'] == 'samplers'):
         sampler_order = msg["data"]
-        sampler_order_min_length = 6
-        sampler_order_max_length = 7
+        sampler_order_min_length = 7
+        sampler_order_max_length = 8
         if(not isinstance(sampler_order, list)):
             raise ValueError(f"Sampler order must be a list, but got a {type(sampler_order)}")
         if(not (sampler_order_min_length <= len(sampler_order) <= sampler_order_max_length)):
@@ -3508,6 +3520,7 @@ def apiactionsubmit_tpumtjgenerate(txt, minimum, maximum):
         np.uint32(txt),
         gen_len = maximum-minimum+1,
         temp=koboldai_vars.temp,
+        cfg=koboldai_vars.cfg,
         top_p=koboldai_vars.top_p,
         top_k=koboldai_vars.top_k,
         tfs=koboldai_vars.tfs,
@@ -3912,7 +3925,8 @@ def generate(txt, minimum, maximum, found_entries=None):
     # Submit input text to generator
     try:
         start_time = time.time()
-        genout, already_generated = tpool.execute(model.core_generate, txt, found_entries)
+        #genout, already_generated = tpool.execute(model.core_generate, txt, found_entries)
+        genout, already_generated = model.core_generate(txt, found_entries)
         logger.debug("Generate: core_generate time {}s".format(time.time()-start_time))
     except Exception as e:
         if(issubclass(type(e), lupa.LuaError)):
@@ -4299,6 +4313,18 @@ def togglememorymode():
     elif(koboldai_vars.mode == "memory"):
         koboldai_vars.mode = "play"
         emit('from_server', {'cmd': 'memmode', 'data': 'false'}, broadcast=True, room="UI_1")
+
+#==================================================================#
+#   Toggles the game mode for unconditional editing and sends UI commands
+#==================================================================#
+def toggleunconditionalmode():
+    if(koboldai_vars.mode == "play"):
+        koboldai_vars.mode = "unconditional"
+        emit('from_server', {'cmd': 'uncondmode', 'data': 'true'}, broadcast=True, room="UI_1")
+        emit('from_server', {'cmd': 'setinputtext', 'data': koboldai_vars.unconditional}, broadcast=True, room="UI_1")
+    elif(koboldai_vars.mode == "unconditional"):
+        koboldai_vars.mode = "play"
+        emit('from_server', {'cmd': 'uncondmode', 'data': 'false'}, broadcast=True, room="UI_1")
 
 #==================================================================#
 #   Toggles the game mode for WI editing and sends UI commands
@@ -7126,7 +7152,7 @@ def UI_2_load_cookies():
 def UI_2_save_new_preset(data):
     preset = model_info()
     #Data to get from current settings
-    for item in ["genamt", "rep_pen", "rep_pen_range", "rep_pen_slope", "sampler_order", "temp", "tfs", "top_a", "top_k", "top_p", "typical"]:
+    for item in ["genamt", "rep_pen", "rep_pen_range", "rep_pen_slope", "sampler_order", "cfg", "temp", "tfs", "top_a", "top_k", "top_p", "typical"]:
         preset[item] = getattr(koboldai_vars, item)
     #Data to get from UI
     for item in ['preset', 'description']:
@@ -7784,16 +7810,9 @@ def UI_2_update_tokens(data):
 def UI_2_privacy_mode(data):
     if data['enabled']:
         koboldai_vars.privacy_mode = True
-        return
-
-    if data['password'] == koboldai_vars.privacy_password:
-        koboldai_vars.privacy_mode = False
     else:
-        logger.warning("Watch out! Someone tried to unlock your instance with an incorrect password! Stay on your toes...")
-        show_error_notification(
-            title="Invalid password",
-            text="The password you provided was incorrect. Please try again."
-        )
+        if data['password'] == koboldai_vars.privacy_password:
+            koboldai_vars.privacy_mode = False
 
 #==================================================================#
 # Genres
@@ -8103,6 +8122,7 @@ class SamplerSettingsSchema(KoboldSchema):
     rep_pen: Optional[float] = fields.Float(validate=validate.Range(min=1), metadata={"description": "Base repetition penalty value."})
     rep_pen_range: Optional[int] = fields.Integer(validate=validate.Range(min=0), metadata={"description": "Repetition penalty range."})
     rep_pen_slope: Optional[float] = fields.Float(validate=validate.Range(min=0), metadata={"description": "Repetition penalty slope."})
+    cfg: Optional[float] = fields.Float(validate=validate.Range(min=1.0), metadata={"description": "CFG sampling value."})
     top_k: Optional[int] = fields.Integer(validate=validate.Range(min=0), metadata={"description": "Top-k sampling value."})
     top_a: Optional[float] = fields.Float(validate=validate.Range(min=0), metadata={"description": "Top-a sampling value."})
     top_p: Optional[float] = fields.Float(validate=validate.Range(min=0, max=1), metadata={"description": "Top-p sampling value."})
@@ -8156,7 +8176,7 @@ class GenerationInputSchema(SamplerSettingsSchema):
     disable_input_formatting: bool = fields.Boolean(load_default=True, metadata={"description": "When enabled, all input formatting options default to `false` instead of the value in the KoboldAI GUI"})
     frmtadsnsp: Optional[bool] = fields.Boolean(metadata={"description": "Input formatting option. When enabled, adds a leading space to your input if there is no trailing whitespace at the end of the previous action.\n\nIf `disable_input_formatting` is `true`, this defaults to `false` instead of the value in the KoboldAI GUI."})
     quiet: Optional[bool] = fields.Boolean(metadata={"description": "When enabled, Generated output will not be displayed in the console."})
-    sampler_order: Optional[List[int]] = fields.List(fields.Integer(), validate=[validate.Length(min=6), permutation_validator], metadata={"description": "Sampler order to be used. If N is the length of this array, then N must be greater than or equal to 6 and the array must be a permutation of the first N non-negative integers."})
+    sampler_order: Optional[List[int]] = fields.List(fields.Integer(), validate=[validate.Length(min=7), permutation_validator], metadata={"description": "Sampler order to be used. If N is the length of this array, then N must be greater than or equal to 7 and the array must be a permutation of the first N non-negative integers."})
     sampler_seed: Optional[int] = fields.Integer(validate=validate.Range(min=0, max=2**64 - 1), metadata={"description": "RNG seed to use for sampling. If not specified, the global RNG will be used."})
     sampler_full_determinism: Optional[bool] = fields.Boolean(metadata={"description": "If enabled, the generated text will always be the same as long as you use the same RNG seed, input and settings. If disabled, only the *sequence* of generated texts that you get when repeatedly generating text will be the same given the same RNG seed, input and settings."})
     stop_sequence: Optional[List[str]] = fields.List(fields.String(),metadata={"description": "An array of string sequences where the API will stop generating further tokens. The returned text WILL contain the stop sequence."}, validate=[validate.Length(max=10)])
@@ -8272,8 +8292,8 @@ def _generate_text(body: GenerationInputSchema):
                 torch.manual_seed(body.sampler_seed)
         koboldai_vars.rng_states[body.sampler_seed] = tpu_mtj_backend.get_rng_state() if koboldai_vars.use_colab_tpu else torch.get_rng_state()
     if hasattr(body, "sampler_order"):
-        if len(body.sampler_order) < 7:
-            body.sampler_order = [6] + body.sampler_order
+        if len(body.sampler_order) < 8:
+            body.sampler_order = [7] + body.sampler_order
     # This maps each property of the setting to use when sending the generate idempotently
     # To the object which typically contains it's value
     # This allows to set the property only for the API generation, and then revert the setting
@@ -8284,6 +8304,7 @@ def _generate_text(body: GenerationInputSchema):
         "rep_pen": ("koboldai_vars", "rep_pen", None),
         "rep_pen_range": ("koboldai_vars", "rep_pen_range", None),
         "rep_pen_slope": ("koboldai_vars", "rep_pen_slope", None),
+        "cfg": ("koboldai_vars", "cfg", None),
         "top_k": ("koboldai_vars", "top_k", None),
         "top_a": ("koboldai_vars", "top_a", None),
         "top_p": ("koboldai_vars", "top_p", None),
@@ -10635,6 +10656,16 @@ class MemorySettingSchema(KoboldSchema):
         example_yaml_value = "Memory"
 
 @config_endpoint_schema
+class UnconditionalSettingSchema(KoboldSchema):
+    value = fields.String(required=True)
+    class KoboldMeta:
+        route_name = "unconditional"
+        obj = "koboldai_vars"
+        var_name = "unconditional"
+        name = "unconditional"
+        example_yaml_value = "Unconditional"
+
+@config_endpoint_schema
 class AuthorsNoteSettingSchema(KoboldSchema):
     value = fields.String(required=True)
     class KoboldMeta:
@@ -10653,6 +10684,16 @@ class AuthorsNoteTemplateSettingSchema(KoboldSchema):
         var_name = "authornotetemplate"
         name = "author's note template"
         example_yaml_value = "\"[Author's note: <|>]\""
+
+@config_endpoint_schema
+class CFGSamplingSettingSchema(KoboldSchema):
+    value = fields.Float(validate=validate.Range(min=1.0), required=True)
+    class KoboldMeta:
+        route_name = "cfg"
+        obj = "koboldai_vars"
+        var_name = "cfg"
+        name = "cfg sampling"
+        example_yaml_value = "0.0"
 
 @config_endpoint_schema
 class TopKSamplingSettingSchema(KoboldSchema):
@@ -10909,14 +10950,13 @@ def run():
             with open('cloudflare.log', 'w') as cloudflarelog:
                 cloudflarelog.write("KoboldAI is available at the following link : " + cloudflare)
                 logger.init_ok("Webserver", status="OK")
-                if not koboldai_vars.use_colab_tpu and args.model:
+                if not koboldai_vars.use_colab_tpu:
                     # If we're using a TPU our UI will freeze during the connection to the TPU. To prevent this from showing to the user we 
                     # delay the display of this message until after that step
-                    logger.message(f"KoboldAI is still loading your model but available at the following link for UI 1: {cloudflare}")
-                    logger.message(f"KoboldAI is still loading your model but available at the following link for UI 2: {cloudflare}/new_ui")
-                    logger.message(f"KoboldAI is still loading your model but available at the following link for KoboldAI Lite: {cloudflare}/lite")
-                    logger.message(f"KoboldAI is still loading your model but available at the following link for the API: [Loading Model...]")
-                    logger.message(f"While the model loads you can use the above links to begin setting up your session, for generations you must wait until after its done loading.")
+                    logger.message(f"KoboldAI is available at the following link for UI 1: {cloudflare}")
+                    logger.message(f"KoboldAI is available at the following link for UI 2: {cloudflare}/new_ui")
+                    logger.message(f"KoboldAI is available at the following link for KoboldAI Lite: {cloudflare}/lite")
+                    logger.message(f"KoboldAI is available at the following link for the API: {cloudflare}/api")
         else:
             logger.init_ok("Webserver", status="OK")
             logger.message(f"Webserver has started, you can now connect to this machine at port: {port}")
